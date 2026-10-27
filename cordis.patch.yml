@@ -1,0 +1,4 @@
+# dsh-session-auto-archive bundle 自带的 patch 层：把插件插入 profile 树。
+- insert:
+    - id: session-auto-archive
+      name: dsh-session-auto-archive

@@ -1,0 +1,40 @@
+{
+  "name": "dsh-session-auto-archive",
+  "displayName": "DSH Session Auto Archive",
+  "description": "DeepSeek Harness 插件：按闲置天数自动归档会话，带设置卡片、归档历史与单条撤销。",
+  "version": "0.1.0",
+  "author": "xiao-hans",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "dsh": ">=0.2.1-rc.1"
+  },
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml", "README.md", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiao-hans/dsh-session-auto-archive.git"
+  },
+  "homepage": "https://github.com/xiao-hans/dsh-session-auto-archive#readme",
+  "bugs": "https://github.com/xiao-hans/dsh-session-auto-archive/issues",
+  "keywords": ["dsh-plugin", "deepseek-harness", "cordis", "session", "archive", "auto-archive"],
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "@hyzyn/dsh-kit": "0.6.0"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-plugin-manager"]
+    }
+  }
+}
