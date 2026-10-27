@@ -19,7 +19,7 @@ DeepSeek Harness（DSH）插件：按**闲置天数自动归档会话**。DSH �
 | `startupDelayMs` | `60000` | 启动后延迟多久跑第一轮 |
 | `excludeCwdSubstrings` | `[]` | cwd 命中任一子串的会话跳过 |
 
-判定“闲置”的活动信号取三者最大值：会话日志文件 mtime（从 snapshot revision 解析）、projcache `lastPromptAt`、`createdAt`。注意 projcache 文件**自身的** mtime 会被后台元数据维护重写，不能当信号用。
+判定「闲置」的活动信号：优先取 projcache 里的用户活动戳（`sessionListMetadata.lastPromptAt` 与 `timeContext.lastMessageTime` 取较大者，与侧栏「N 天」同源）。会话日志文件 mtime 只在该戳缺失、或两者相差不到 24 小时（`STALE_LOG_MTIME_MS`）时才采信。注意 projcache 文件**自身的** mtime 也不能当信号用——DSH 会往会话日志追加 `permission/preset`、`sandbox/mode`、`approval/policy`、`session/end-seed` 这类纯元数据记录并重写文件时间戳，实测一次批量重写 touch 了 10 个会话文件，把闲置 10 天的会话刷成「3 天前刚活动」；无条件采信文件 mtime 就会漏归档。
 
 安全底线：live（当前打开/在跑）、置顶、工作区活动非空、命中排除清单的会话一律跳过；归档走 DSH 原生 `workspaceRegistry.archiveSession()`，与手动归档完全同一状态（workspace.json 的 `global.archivedSessionIds`），不删任何数据。
 
@@ -32,15 +32,32 @@ DeepSeek Harness（DSH）插件：按**闲置天数自动归档会话**。DSH �
    cd ~/.dsh/profiles/desktop
    git clone https://github.com/xiao-hans/dsh-session-auto-archive.git
    ```
-2. 在 `package.json` 的 `dependencies` 加：
-   ```json
-   "dsh-session-auto-archive": "file:./dsh-session-auto-archive"
+2. 注册进 profile（写 `package.json` 的 `dependencies` 与 `dsh.profile.bundles`，幂等；也可以按老办法手工改这两个字段）：
+   ```bash
+   node dsh-session-auto-archive/scripts/update.mjs --register
    ```
-   并把包名追加进 `dsh.profile.bundles` 数组。
 3. 在该 profile 目录执行 `pnpm install`。
 4. 重启 DSH。插件自带的 `cordis.patch.yml` 会把 `session-auto-archive` 插入插件树，无需额外 patch。
 
 也可以打成 npm 包安装（仓库名即包名）。
+
+## 更新（多机）
+
+插件就放在 profile 目录下的 git 克隆里，更新 = pull + 按需 install + 重启。仓库自带 `scripts/update.mjs`（零依赖，Windows/macOS/Linux 通用）：
+
+```bash
+# 首次安装（第 2 步的替代）：自动写 profile 的 dependencies 与 dsh.profile.bundles，幂等
+node dsh-session-auto-archive/scripts/update.mjs --register
+
+# 看有没有新版本（不动盘；有新版时退出码 10，方便脚本化）
+node dsh-session-auto-archive/scripts/update.mjs --check
+
+# 更新：git pull --ff-only；依赖有变化自动在 profile 目录 pnpm install
+node dsh-session-auto-archive/scripts/update.mjs
+```
+
+脚本会拒绝在有未提交改动的树上 pull（防止覆盖本地补丁）；装成 npm 包时没有 .git，按提示重装新版本包即可。更新后必须完全重启 DSH（或禁用→启用本插件），并用 `GET /api/dsh-auto-archive/status` 返回里的 `version` 或设置卡片标题右侧的版本徽章自证生效。
+
 
 ## 使用
 
