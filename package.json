@@ -16,25 +16,43 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
-  "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml", "README.md", "LICENSE"],
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "scripts/"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/xiao-hans/dsh-session-auto-archive.git"
   },
   "homepage": "https://github.com/xiao-hans/dsh-session-auto-archive#readme",
   "bugs": "https://github.com/xiao-hans/dsh-session-auto-archive/issues",
-  "keywords": ["dsh-plugin", "deepseek-harness", "cordis", "session", "archive", "auto-archive"],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "session",
+    "archive",
+    "auto-archive"
+  ],
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.4",
-    "@hyzyn/dsh-kit": "0.6.0"
+    "@hyzyn/dsh-kit": "^0.6.0 || ^0.7.0"
   },
   "dsh": {
     "manifestVersion": 1,
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["@deepseek-ai/dsh-client-ui-plugin-manager"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
     }
   }
 }
