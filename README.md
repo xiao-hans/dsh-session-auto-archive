@@ -25,7 +25,19 @@ DeepSeek Harness（DSH）插件：按**闲置天数自动归档会话**。DSH �
 
 ## 安装
 
-把本仓库放进 DSH profile 目录并注册为 bundle（以 `desktop` profile 为例，目录 `~/.dsh/profiles/desktop`）：
+### 方式 A：npm 包（推荐）
+
+DSH 的 profile 是 pnpm 工程（`nodeLinker: hoisted` + `pnpm-lock.yaml`），所以用 pnpm 装，别用 `npm install` 混装：
+
+```bash
+cd ~/.dsh/profiles/desktop
+pnpm add dsh-session-auto-archive           # 国内镜像源滞后时用：--registry=https://registry.npmjs.org/
+node node_modules/dsh-session-auto-archive/scripts/update.mjs --register
+```
+
+重启 DSH。插件自带的 `cordis.patch.yml` 会把 `session-auto-archive` 插入插件树，无需额外 patch。
+
+### 方式 B：git 克隆（便于跟仓库改动）
 
 1. 克隆到 profile 下：
    ```bash
@@ -37,9 +49,9 @@ DeepSeek Harness（DSH）插件：按**闲置天数自动归档会话**。DSH �
    node dsh-session-auto-archive/scripts/update.mjs --register
    ```
 3. 在该 profile 目录执行 `pnpm install`。
-4. 重启 DSH。插件自带的 `cordis.patch.yml` 会把 `session-auto-archive` 插入插件树，无需额外 patch。
+4. 重启 DSH。
 
-也可以打成 npm 包安装（仓库名即包名）。
+> 两种方式都要在 profile 的 `dsh.profile.bundles` 里出现 `dsh-session-auto-archive`；`--register` 就是替你写这个，幂等，重复跑安全。
 
 ## 更新（多机）
 
