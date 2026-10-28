@@ -5,6 +5,7 @@ DeepSeek Harness（DSH）插件：按**闲置天数自动归档会话**。DSH �
 - 设置卡片直接挂在 **设置 → 插件设置**（与 dsh-qoder-connect 同一共享区块），也出现在 **侧栏 插件 → 已安装 → 本插件行 → 配置**。
 - 卡片为折叠式单行（点击展开），版式对齐 DSH 主题令牌，自动跟随深/浅色主题。
 - 内置**归档历史**：审计日志尾部（含会话标题、闲置天数、cwd），已归档条目可**逐条撤销**。
+- 附带两个**侧栏排序**辅助能力：`回到会话自动取消归档`（会话再次产生用户消息时自动 unarchive，于是它带着新鲜的活跃时间回到列表顶部），以及手动排序模式的一次性诊断/修复（详见「侧栏排序」）。
 
 ## 功能与默认值
 
@@ -15,6 +16,7 @@ DeepSeek Harness（DSH）插件：按**闲置天数自动归档会话**。DSH �
 | `dryRun` | `true` | 演练模式：只写审计、不真正归档。**首次安装务必先跑一轮演练** |
 | `keepPinned` | `true` | 置顶会话永不自动归档 |
 | `includeSubagents` | `false` | 子代理会话是否参与归档 |
+| `autoUnarchive` | `true` | 会话再次产生用户消息时自动取消归档（配合「按最近活跃」排序回到顶部） |
 | `intervalHours` | `12` | 定时扫描节奏 |
 | `startupDelayMs` | `60000` | 启动后延迟多久跑第一轮 |
 | `excludeCwdSubstrings` | `[]` | cwd 命中任一子串的会话跳过 |
@@ -22,6 +24,15 @@ DeepSeek Harness（DSH）插件：按**闲置天数自动归档会话**。DSH �
 判定「闲置」的活动信号：优先取 projcache 里的用户活动戳（`sessionListMetadata.lastPromptAt` 与 `timeContext.lastMessageTime` 取较大者，与侧栏「N 天」同源）。会话日志文件 mtime 只在该戳缺失、或两者相差不到 24 小时（`STALE_LOG_MTIME_MS`）时才采信。注意 projcache 文件**自身的** mtime 也不能当信号用——DSH 会往会话日志追加 `permission/preset`、`sandbox/mode`、`approval/policy`、`session/end-seed` 这类纯元数据记录并重写文件时间戳，实测一次批量重写 touch 了 10 个会话文件，把闲置 10 天的会话刷成「3 天前刚活动」；无条件采信文件 mtime 就会漏归档。
 
 安全底线：live（当前打开/在跑）、置顶、工作区活动非空、命中排除清单的会话一律跳过；归档走 DSH 原生 `workspaceRegistry.archiveSession()`，与手动归档完全同一状态（workspace.json 的 `global.archivedSessionIds`），不删任何数据。
+
+## 侧栏排序
+
+DSH 侧栏有两种排序模式（**视图**菜单里切换）：`按最近活跃` 严格按最后一次用户消息时间倒序；`手动` 则优先使用拖拽保存下来的位置——手动模式下你回到某个老会话继续聊，它的时间标签会刷新，但**不会**排到最上面，归档过的条目还会被钉在列表底部。本插件不替换原生比较器（排序状态是浏览器本地的 view store，官方没给插件留改比较器的口子），而是做两件可达成的事：
+
+1. **回到会话自动取消归档**（`autoUnarchive`）：监听宿主 `api-session/activity` 事件——只有用户亲手发出的持久消息才会触发。归档中的会话在 UI 里根本打不开，所以这个事件对已归档 id 只可能来自定时任务/目标续跑这类后台轮次；插件此时立刻 `unarchiveSession()` 并写一条 `by:"reactivated"` 审计。这条消息本身已经把 `updatedAt` 刷新，于是会话在「按最近活跃」模式下直接回到顶部。
+2. **排序模式诊断**：卡片展开时读出浏览器本地 `dsh.workspace.view.v5` 里的 `orderBy`。若为 `手动`，卡片显示一行说明并提供「切回按最近活跃」按钮——点击写入 `{orderBy:"updated", sessionOrderByAccount:{}}`（与原生菜单行为一致：离开手动模式会清空保存的拖拽顺序）并立刻刷新页面，因为该 view store 只在启动时 hydrate 一次。只读诊断不写盘；除非你点那个按钮。
+
+> 想让「回到老会话后它冒到最上面」成立，需要同时满足：排序模式为 `按最近活跃`（卡片第一行可确认/一键修正）+ 该会话没有被归档（`autoUnarchive` 负责）。
 
 ## 安装
 
