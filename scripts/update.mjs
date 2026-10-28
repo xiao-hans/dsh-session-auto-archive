@@ -2,28 +2,24 @@
 /**
  * dsh-session-auto-archive 安装/更新脚本（多机通用，零依赖）。
  *
- *   node <profile>/dsh-session-auto-archive/scripts/update.mjs --register
- *       首次安装：把插件写进 profile 的 dependencies 与 dsh.profile.bundles（幂等）。
+ *   node <profile>/node_modules/dsh-session-auto-archive/scripts/update.mjs --register
+ *   （pnpm add 装法）或 node <profile>/dsh-session-auto-archive/scripts/update.mjs --register
+ *   （git clone 装法）—— 首次安装：把插件写进 profile 的 dsh.profile.bundles（幂等；
+ *   git clone 装法顺带补 dependencies）。
  *   node <profile>/dsh-session-auto-archive/scripts/update.mjs --check
  *       只看有没有新版本，不动盘；有新版时退出码为 10。
  *   node <profile>/dsh-session-auto-archive/scripts/update.mjs
  *       更新：git pull --ff-only，依赖有变化时自动 pnpm install。
  *
- * 脚本假定自己躺在 profile 目录下的插件目录里（profile 目录 = 上一级），因此
- * desktop / web 两个 profile、任何机器都不用改路径。npm 包安装（无 .git）时
- * --register 依旧可用，pull 相关分支自动跳过。
+ * 脚本认得出自己躺在哪儿：profile 目录下的插件目录（git clone），或 profile 的
+ * node_modules 里（pnpm add / npm 包安装），因此 desktop / web 两个 profile、
+ * 任何机器都不用改路径。npm 包安装（无 .git）时 --register 依旧可用，pull 相关
+ * 分支自动跳过。
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const PROFILE_DIR = dirname(PLUGIN_DIR);
-const args = process.argv.slice(2);
-const CHECK = args.includes('--check');
-const REGISTER = args.includes('--register');
-const NO_INSTALL = args.includes('--no-install');
 
 const die = (msg) => { console.error(`\n!! ${msg}\n`); process.exit(1); };
 const runGit = (a) => spawnSync('git', a, { cwd: PLUGIN_DIR, encoding: 'utf8', shell: process.platform === 'win32' });
@@ -33,6 +29,43 @@ const git = (a) => {
     return (r.stdout || '').trim();
 };
 const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return undefined; } };
+
+const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * profile 目录 = 插件目录的宿主。两种装法都要认出来：
+ *   git clone → <profile>/dsh-session-auto-archive            （上一级就是 profile）
+ *   pnpm add  → <profile>/node_modules/dsh-session-auto-archive（上一级是 node_modules，要再跳一级）
+ * 认不出来时宁可多问一句，也别把 profile 的 package.json 写到 node_modules 里去。
+ */
+function findProfileDir(pluginDir) {
+    const looksLikeProfile = (dir) => {
+        const manifest = readJson(resolve(dir, 'package.json'));
+        if (!manifest) return false;
+        if (manifest.dsh?.profile || Array.isArray(manifest.dsh?.profile?.bundles)) return true;
+        // 手工装过、还没写 dsh 字段的 profile：靠 profile 目录的标志性文件认
+        return existsSync(resolve(dir, 'cordis.yml')) || existsSync(resolve(dir, 'compatibility.json'));
+    };
+    let dir = dirname(pluginDir);
+    for (let hop = 0; hop < 4; hop++) {
+        if (basename(dir) === 'node_modules') { dir = dirname(dir); continue; }
+        if (looksLikeProfile(dir)) return dir;
+        const parent = dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return undefined;
+}
+
+const PROFILE_DIR = findProfileDir(PLUGIN_DIR) ?? die(
+    `认不出 profile 目录（插件在 ${PLUGIN_DIR}）。\n` +
+    `   请在 profile 目录（如 ~/.dsh/profiles/desktop）下运行本脚本，` +
+    `或检查该目录的 package.json 里有没有 "dsh": { "profile": … }。`,
+);
+const args = process.argv.slice(2);
+const CHECK = args.includes('--check');
+const REGISTER = args.includes('--register');
+const NO_INSTALL = args.includes('--no-install');
 
 const pkg = readJson(resolve(PLUGIN_DIR, 'package.json')) ?? die('读不到本插件的 package.json');
 const NAME = pkg.name;
@@ -44,34 +77,48 @@ console.log(`  插件目录  ${PLUGIN_DIR}`);
 console.log(`  profile   ${PROFILE_DIR}`);
 console.log(`  本地版本  v${LOCAL_VERSION}\n`);
 
-// ---- --register：写 profile 的 dependencies + bundles。不需要 git，npm 安装也能用。----
+// ---- --register：把插件写进 profile 的 dsh.profile.bundles（幂等）。不需要 git。
+// git clone 装法顺带补 dependencies（file: 引用）；node_modules 装法（pnpm add）的
+// 依赖由包管理器负责，脚本不插手，免得把 registry 版本改成不存在的 file: 路径。
 if (REGISTER) {
     const profilePkg = readJson(PROFILE_PKG_PATH) ?? die(`读不到 ${PROFILE_PKG_PATH}`);
-    profilePkg.dependencies ??= {};
     profilePkg.dsh ??= {};
     profilePkg.dsh.profile ??= {};
     const bundles = (profilePkg.dsh.profile.bundles ??= []);
+    const installedFromRegistry = basename(dirname(PLUGIN_DIR)) === 'node_modules';
     const wantDep = `file:./${basename(PLUGIN_DIR)}`;
-    const changes = [];
-    if (profilePkg.dependencies[NAME] === undefined) {
+    const mutations = [];   // 真正要写的东西
+    const notes = [];       // 只提示，不触发写入
+    if (installedFromRegistry) {
+        if (profilePkg.dependencies?.[NAME] === undefined) {
+            notes.push(`! dependencies 里没有 "${NAME}" —— 包在 node_modules 里但没登记，` +
+                `下次 pnpm install 会被清掉。请在 profile 目录跑：pnpm add ${NAME}`);
+        }
+    } else if (profilePkg.dependencies?.[NAME] === undefined) {
+        profilePkg.dependencies ??= {};
         profilePkg.dependencies[NAME] = wantDep;
-        changes.push(`+ dependencies["${NAME}"] = "${wantDep}"`);
+        mutations.push(`+ dependencies["${NAME}"] = "${wantDep}"`);
     } else if (profilePkg.dependencies[NAME] !== wantDep) {
-        changes.push(`~ dependencies["${NAME}"] 已是 "${profilePkg.dependencies[NAME]}"（非 file: 引用，不覆盖，请自行确认）`);
+        notes.push(`~ dependencies["${NAME}"] 已是 "${profilePkg.dependencies[NAME]}"（与脚本期望的 "${wantDep}" 不同，保持不动，请自行确认）`);
     }
     if (!bundles.includes(NAME)) {
         bundles.push(NAME);
-        changes.push(`+ dsh.profile.bundles 追加 "${NAME}"`);
+        mutations.push(`+ dsh.profile.bundles 追加 "${NAME}"`);
     }
-    if (!changes.length) { console.log('  已注册，profile 无需改动。\n'); process.exit(0); }
+    notes.forEach((n) => console.log(`  ${n}`));
+    if (!mutations.length) { console.log('  profile 无需改动。\n'); process.exit(0); }
     console.log('  写入 profile/package.json：');
-    changes.forEach((c) => console.log(`    ${c}`));
+    mutations.forEach((c) => console.log(`    ${c}`));
     const before = readFileSync(PROFILE_PKG_PATH, 'utf8');
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+    writeFileSync(`${PROFILE_PKG_PATH}.backup-auto-archive-${stamp}`, before);
     const eol = before.includes('\r\n') ? '\r\n' : '\n';
     const after = JSON.stringify(profilePkg, null, 2) + (before.endsWith('\n') ? '\n' : '');
     writeFileSync(PROFILE_PKG_PATH, eol === '\r\n' ? after.replace(/\n/g, '\r\n') : after);
     console.log(`  已写入 ${PROFILE_PKG_PATH}`);
-    console.log('  接着在该 profile 目录执行 pnpm install，然后重启 DSH。\n');
+    console.log(installedFromRegistry
+        ? '  包已在 node_modules 里，直接重启 DSH 即可。\n'
+        : '  接着在该 profile 目录执行 pnpm install，然后重启 DSH。\n');
     process.exit(0);
 }
 
