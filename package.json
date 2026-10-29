@@ -2,7 +2,7 @@
   "name": "dsh-session-auto-archive",
   "displayName": "DSH Session Auto Archive",
   "description": "DeepSeek Harness 插件：按闲置天数自动归档会话、回到会话自动取消归档，带设置卡片、归档历史与单条撤销。",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "xiao-hans",
   "license": "MIT",
   "type": "module",
@@ -49,7 +49,6 @@
     },
     "client": {
       "platform": "web",
-      "immediately": true,
       "inject": [
         "@deepseek-ai/dsh-client-ui-plugin-manager"
       ]
