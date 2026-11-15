@@ -1,6 +1,6 @@
 # dsh-session-auto-archive
 
-DeepSeek Harness（DSH）插件：按**闲置天数自动归档会话**。DSH 原生只有手动的 Archive 按钮，本插件补上自动触发器：定时扫描全部会话，把长期不活跃的会话归档掉，侧栏立刻清爽；误归档可随时单条撤销。
+DeepSeek Harness（DSH）插件：按**闲置天数自动归档会话**。DSH 原生只有手动的 Archive 按钮，本插件补上自动触发器：定时扫描全部会话，把长期不活跃的会话归档掉，侧栏立刻清爽；误归档可随时单条撤销：归档前会完整备份日志，撤销时逐字节还原，恢复后能继续原对话。
 
 - 设置卡片直接挂在 **设置 → 插件设置**（与 dsh-qoder-connect 同一共享区块），也出现在 **侧栏 插件 → 已安装 → 本插件行 → 配置**。
 - 卡片为折叠式单行（点击展开），版式对齐 DSH 主题令牌，自动跟随深/浅色主题。
@@ -88,8 +88,38 @@ node dsh-session-auto-archive/scripts/update.mjs
 
 - 安装后打开 **设置 → 插件设置 → 会话自动归档** 展开卡片。
 - 建议流程：先保持 `dryRun` 开 → 点“立即扫描” → 到“归档历史”里看 `planned` 条目是否都是你想归档的 → 关闭 `dryRun` 正式启用。
-- 撤销：历史里单条“撤销”（走原生 unarchive），或点“撤销上次批量”。
-- 数据落盘在 `~/.dsh/storages/auto-archive/`：`config.json`（插件自持配置，Web UI 读写）、`status.json`（上次运行）、`audit.log`（JSONL 审计流水）。
+- 撤销：历史里单条“撤销”，或点“撤销上次批量”。v0.2.0 起从归档前的完整备份逐字节还原，恢复后可继续原对话，见下一节。
+- v0.2.1 起，DSH 侧栏的 **手动归档** 也会先备份再归档，并进入同一份归档历史；不会再出现“手动归档后没有备份、永久丢失”。
+- 数据落盘在 `~/.dsh/storages/auto-archive/`：`config.json`（插件自持配置，Web UI 读写）、`status.json`（上次运行）、`audit.log`（JSONL 审计流水）、`last-archive.json`（最近一次真实归档的批次，供重启后一键撤销）。
+
+### 撤销归档（v0.2.0 起：完整备份 + 逐字节还原）
+
+**症状**：v0.1.7 及以前，点“撤销”后 `workspace.json` 的 `global.archivedSessionIds` 确实少了这个 id，审计也写了 `unarchived`，但侧栏里会话还是不回来；v0.1.8 改为重建 header-only 占位日志，侧栏能出现条目，但点进去是空白新会话，**不能 resume**。
+
+**根因**：宿主 `unarchiveSession()` 只删归档标志；侧栏显示会话还需要 `sessionQuery.listSessions()` 能产出摘要、`WorkspaceEntity.sessionIds` 含该 id、且日志文件存在。日志缺失后，宿主任何一次 `WorkspaceEntity.mutate()` 都会剪枝并把 id 从 `record.sessionIds` **永久删除**。占位日志只能补“可见性”，补不回对话内容。
+
+**v0.2.0 的撤销流程**（`lib/session-restore.mjs`）：
+
+1. **归档前完整备份**：`lib/index.js` 在调用 `archiveSession()` 之前读取原始日志，校验 v4 header、id 一致、至少含一条真实对话事件（`user/message` / `assistant/message` / `tool/call` / `tool/result`），把日志、projcache 与 `manifest.json`（SHA-256、字节数、事件数、cwd、workspaceId、restorePath）写到 `<storeDir>/archive/<encoded-id>/`。备份失败或日志是空壳时**拒绝归档**。
+2. 撤销时从 `last-archive.json` 读“上次批量”；文件缺失时从 `audit.log` 尾部按 5 分钟窗口重建，重启后整批撤销依然有效。
+3. 逐条 `readBackup()` 校验 SHA-256、字节数与真实对话事件数；没有通过校验的备份一律拒绝恢复。
+4. 目标位置已有**真实对话** → `restore-conflict`，绝不覆盖用户后来写的数据；字节完全相同 → 识别为 `existing-backup`，不重复写；只有“无对话事件的空壳”允许替换，且先写 `.pre-restore-*` 留档。
+5. 原子还原日志与 projcache 后，才调 `unarchiveSession()`；再用原始工作区记录 `rememberSessionPath()` + `attachSession()` 补回槽位（不能用已过滤的 `entity.sessionIds`）。
+6. 用备份里的真实 header/投影发 `api-session/added` 摘要（不是伪造消息），并用 `workspaceController.feed.publish({type:"upsert"})` 刷新 sessionIds 视图。
+7. 审计与接口返回区分 `reverted` / `restored` / `skipped` / `warnings` / `details`；`restoredFrom` 取值 `archive-backup` / `existing-backup` / `none`，`resumable` 表示能否真正回到原对话，`attached` 表示工作区槽位是否补回。
+
+> **只有完整备份才叫“恢复”**：没有备份时接口返回 `restore-failed` 并保持归档，客户端显示“不可恢复”，不会生成任何空壳。v0.1.8 生成的 header-only 占位日志无法 resume，v0.2.0 不再生成。
+
+### 手动归档（v0.2.1 起：同样先备份）
+
+DSH 侧栏 Archive 按钮走 `WorkspaceController.archiveSession` → RPC → `workspaceRegistry.archiveSession`。该服务方法在宿主里是只读的，插件包不住，因此用两条路径保护：
+
+1. **侧栏手动归档**：插件每 2 秒轮询 `workspaceRegistry.archivedSessionIds`。发现新出现的 id 且 `archive/<id>/manifest.json` 不存在时，立刻读取仍在盘上的原始日志，调用 `createReverter().backup()` 补写完整备份（日志、projcache、SHA-256 manifest），审计记 `{ action:"archived", by:"watch", backup:{...} }`。
+2. **`POST /api/dsh-auto-archive/archive`**：先备份再调 `registry.archiveSession`；备份失败直接抛错、不归档。
+
+两条路径都会写 `last-archive.json`，所以“撤销上次批量”也能撤销刚手动归档的会话；日志不存在或只有空壳时允许归档，但审计里 `backup:null`、`guard:"no-log"|"empty-shell"`。
+
+宿主自己的清理动作无法拦截；手动归档一旦在 v0.2.1 之前发生且日志已被删除，仍然不可恢复。
 
 ## HTTP API（仅 loopback）
 
@@ -98,18 +128,23 @@ node dsh-session-auto-archive/scripts/update.mjs
 | `GET /api/dsh-auto-archive/status` | 当前配置 + 上次运行结果 |
 | `GET/POST /api/dsh-auto-archive/settings` | 读/写配置（POST 带 `expectedRevision` 防冲突，冲突返回 409） |
 | `POST /api/dsh-auto-archive/run` | 手动触发一轮扫描，body 可带 `{ dryRun }` |
-| `POST /api/dsh-auto-archive/revert` | 撤销上次批量；body 带 `{ sessionId }` 则单条撤销 |
+| `POST /api/dsh-auto-archive/archive` | 手动归档一个会话：先完整备份，再调 `registry.archiveSession`；body `{ sessionId }` |
+| `POST /api/dsh-auto-archive/revert` | 撤销上次批量；body 带 `{ sessionId }` 则单条撤销。返回 `reverted` / `restored` / `skipped` / `warnings` / `details` 及各 `*Count` |
 | `GET /api/dsh-auto-archive/history?limit=N` | 审计历史（新→旧），条目已补会话标题 |
 
 ## 开发说明
 
 - `lib/index.js`：宿主侧（timer、扫描、归档、审计、路由）。
+- `lib/session-restore.mjs`：归档前完整备份；撤销时校验 SHA-256、逐字节还原日志/投影、补工作区槽位、推前端帧、批次持久化。
 - `lib/client.js`：浏览器侧（React 卡片，`window.__ModuleLoader__.load` 工厂；经 `settings.section`/`plugin-settings.item` 共享区块与 `plugins.row.config` 两个槽位挂载）。
+- `test/revert.test.mjs` / `test/client-card.test.mjs`：`node --test test/*.test.mjs`（或 `npm test`），覆盖路径编码、备份校验、逐字节还原、冲突保护、空壳替换、跨重启批次、审计兜底、幂等与设置卡片首屏。
 - 本地联调时直接改 profile 目录内的源文件：客户端改动刷新页面即生效（combo rev 随文件元数据变化）；宿主侧改动需禁用→启用插件一次以重新注册路由。
 
 ## 限制
 
 - 依赖 DSH 内部服务名（`sessionPersistence`、`workspaceRegistry`、`webServer`、槽位 `plugin-settings.item`），跨大版本可能需要适配；实测基线 0.2.1-rc.2。
+- 恢复依赖归档前写下的完整备份。v0.1.8 及以前归档的会话、以及 v0.2.1 之前在 DSH 侧栏手动归档的会话都没有备份：撤销会返回 `restore-failed`（`resumable:false`）并保持归档，不会生成空壳。备份缺失/损坏、目标已被真实对话占用分别报 `unrecoverable-backup` / `restore-conflict`；找不到原工作区报 `missing-workspace`，`attachSession()` 失败报 `attach-failed`。
+- `workspaceRegistry.host.rememberSessionPath`、`registry.requireTable()`、`workspaceController.feed.publish` 是宿主私有字段/方法，`attachSession()` 依赖宿主的 `realpath` 校验；大版本变更后若不可用会降级为「解除归档标志 + 落盘日志」，重启 DSH 后新日志仍会被索引。目标工作区的原始记录优先取 `requireTable()`，失败时回退读 `~/.dsh/storages/workspace.json`。
 - 语言：卡片内建中/英双语文案（按浏览器语言选择）。
 
 ## License
